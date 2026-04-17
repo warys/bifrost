@@ -340,6 +340,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationNormalizeOtelTraceType(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddVirtualKeyExpirationColumns(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -5121,6 +5124,51 @@ func migrationNormalizeOtelTraceType(ctx context.Context, db *gorm.DB) error {
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running normalize_otel_trace_type migration: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddVirtualKeyExpirationColumns adds expires_at, ttl, and is_expired columns to the virtual_keys table.
+func migrationAddVirtualKeyExpirationColumns(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_virtual_key_expiration_columns",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if !migrator.HasColumn(&tables.TableVirtualKey{}, "expires_at") {
+				if err := migrator.AddColumn(&tables.TableVirtualKey{}, "expires_at"); err != nil {
+					return err
+				}
+			}
+			if !migrator.HasColumn(&tables.TableVirtualKey{}, "ttl") {
+				if err := migrator.AddColumn(&tables.TableVirtualKey{}, "ttl"); err != nil {
+					return err
+				}
+			}
+			if !migrator.HasColumn(&tables.TableVirtualKey{}, "is_expired") {
+				if err := migrator.AddColumn(&tables.TableVirtualKey{}, "is_expired"); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if err := migrator.DropColumn(&tables.TableVirtualKey{}, "expires_at"); err != nil {
+				return err
+			}
+			if err := migrator.DropColumn(&tables.TableVirtualKey{}, "ttl"); err != nil {
+				return err
+			}
+			if err := migrator.DropColumn(&tables.TableVirtualKey{}, "is_expired"); err != nil {
+				return err
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_virtual_key_expiration_columns migration: %s", err.Error())
 	}
 	return nil
 }

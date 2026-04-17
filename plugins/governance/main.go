@@ -370,6 +370,10 @@ func (p *GovernancePlugin) HTTPTransportPreHook(ctx *schemas.BifrostContext, req
 		if !ok || virtualKey == nil || !virtualKey.IsActive {
 			return nil, nil
 		}
+		// Check if virtual key has expired
+		if virtualKey.IsExpired || (virtualKey.ExpiresAt != nil && time.Now().After(*virtualKey.ExpiresAt)) {
+			return nil, nil
+		}
 	}
 
 	//1. Apply routing rules only if we have rules or matched decision
@@ -437,6 +441,10 @@ func (p *GovernancePlugin) governLargePayload(ctx *schemas.BifrostContext, req *
 	if virtualKeyValue != nil {
 		vk, ok := p.store.GetVirtualKey(*virtualKeyValue)
 		if !ok || vk == nil || !vk.IsActive {
+			return nil, nil
+		}
+		// Check if virtual key has expired
+		if vk.IsExpired || (vk.ExpiresAt != nil && time.Now().After(*vk.ExpiresAt)) {
 			return nil, nil
 		}
 		virtualKey = vk

@@ -127,6 +127,7 @@ func (pq *ProviderQueue) signalClosing() {
 func (pq *ProviderQueue) closeQueue() {
 	pq.closeOnce.Do(func() {
 		close(pq.queue)
+		pq.SetClosing()
 	})
 }
 
@@ -134,6 +135,12 @@ func (pq *ProviderQueue) closeQueue() {
 // Uses atomic load for lock-free checking.
 func (pq *ProviderQueue) isClosing() bool {
 	return atomic.LoadUint32(&pq.closing) == 1
+}
+
+// SetClosing marks the provider queue as closing.
+// This ensures isClosing() returns true after closeQueue() is called.
+func (pq *ProviderQueue) SetClosing() {
+	atomic.StoreUint32(&pq.closing, 1)
 }
 
 // PluginPipeline encapsulates the execution of plugin PreHooks and PostHooks, tracks how many plugins ran, and manages short-circuiting and error aggregation.
