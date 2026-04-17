@@ -32,7 +32,7 @@ import { Customer, Team, VirtualKey } from "@/lib/types/governance";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/governance";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
-import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Download, Edit, Eye, EyeOff, Loader2, Plus, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowUpDown, ChevronLeft, ChevronRight, Clock, Copy, Download, Edit, Eye, EyeOff, Loader2, Plus, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import VirtualKeyDetailSheet from "./virtualKeyDetailsSheet";
@@ -44,7 +44,7 @@ const formatResetDuration = (duration: string) => resetDurationLabels[duration] 
 type ExportScope = "current_page" | "all"
 
 function virtualKeysToCSV(vks: VirtualKey[]): string {
-	const headers = ["Name", "Status", "Assigned To", "Budget Limit", "Budget Spent", "Budget Reset", "Description", "Created At"]
+	const headers = ["Name", "Status", "Assigned To", "Budget Limit", "Budget Spent", "Budget Reset", "TTL", "Expires At", "Is Expired", "Description", "Created At"]
 	const rows = vks.map((vk) => {
 		const isExhausted =
 			(vk.budget?.current_usage && vk.budget?.max_limit && vk.budget.current_usage >= vk.budget.max_limit) ||
@@ -55,7 +55,10 @@ function virtualKeysToCSV(vks: VirtualKey[]): string {
 		const budgetLimit = vk.budget ? formatCurrency(vk.budget.max_limit) : ""
 		const budgetSpent = vk.budget ? formatCurrency(vk.budget.current_usage) : ""
 		const budgetReset = vk.budget ? formatResetDuration(vk.budget.reset_duration) : ""
-		return [vk.name, status, assignedTo, budgetLimit, budgetSpent, budgetReset, vk.description || "", vk.created_at]
+		const ttl = vk.ttl || ""
+		const expiresAt = vk.expires_at || ""
+		const isExpired = vk.is_expired ? "Yes" : "No"
+		return [vk.name, status, assignedTo, budgetLimit, budgetSpent, budgetReset, ttl, expiresAt, isExpired, vk.description || "", vk.created_at]
 	})
 	return [headers, ...rows]
 		.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
@@ -443,13 +446,14 @@ export default function VirtualKeysTable({
 								<TableHead>Key</TableHead>
 								<TableHead><SortableHeader column="budget_spent" label="Budget" /></TableHead>
 								<TableHead><SortableHeader column="status" label="Status" /></TableHead>
+								<TableHead>Expiration</TableHead>
 								<TableHead className="text-right"></TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{virtualKeys.length === 0 ? (
 								<TableRow>
-									<TableCell colSpan={6} className="h-24 text-center">
+									<TableCell colSpan={7} className="h-24 text-center">
 										<span className="text-muted-foreground text-sm">No matching virtual keys found.</span>
 									</TableCell>
 								</TableRow>
@@ -524,6 +528,25 @@ export default function VirtualKeysTable({
 												<Badge variant={vk.is_active ? (isExhausted ? "destructive" : "default") : "secondary"}>
 													{vk.is_active ? (isExhausted ? "Exhausted" : "Active") : "Inactive"}
 												</Badge>
+											</TableCell>
+											<TableCell>
+												{vk.is_expired ? (
+													<Badge variant="destructive" className="gap-1">
+														<Clock className="h-3 w-3" />
+														Expired
+													</Badge>
+												) : vk.expires_at ? (
+													<div className="flex flex-col gap-0.5">
+														<span className="font-mono text-xs">
+															{new Date(vk.expires_at).toLocaleDateString()}
+														</span>
+														<span className="text-muted-foreground text-xs">
+															TTL: {vk.ttl || "-"}
+														</span>
+													</div>
+												) : (
+													<span className="text-muted-foreground text-xs">Never</span>
+												)}
 											</TableCell>
 											<TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
 												<div className="flex items-center justify-end gap-2">

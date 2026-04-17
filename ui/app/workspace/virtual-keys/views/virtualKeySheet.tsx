@@ -12,6 +12,7 @@ import {
 	AlertDialogTitle,
 } from "@/components/ui/alertDialog";
 import { AsyncMultiSelect } from "@/components/ui/asyncMultiselect";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfigSyncAlert } from "@/components/ui/configSyncAlert";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -96,6 +97,8 @@ const formSchema = z
 	.object({
 		name: z.string().min(1, "Virtual key name is required"),
 		description: z.string().optional(),
+		// Expiration fields
+		ttl: z.string().optional(),
 		providerConfigs: z.array(providerConfigSchema).optional(),
 		mcpConfigs: z.array(mcpConfigSchema).optional(),
 		entityType: z.enum(["team", "customer", "none"]),
@@ -173,6 +176,7 @@ export default function VirtualKeySheet({ virtualKey, teams, customers, onSave, 
 		defaultValues: {
 			name: virtualKey?.name || "",
 			description: virtualKey?.description || "",
+			ttl: virtualKey?.ttl || "none",
 			providerConfigs:
 				virtualKey?.provider_configs?.map((config) => ({
 					...config,
@@ -251,6 +255,17 @@ export default function VirtualKeySheet({ virtualKey, teams, customers, onSave, 
 
 	// MCP client configuration state
 	const [selectedMCPClient, setSelectedMCPClient] = useState<string>("");
+
+	// Computed expiration date from TTL
+	const [computedExpiresAt, setComputedExpiresAt] = useState<Date | null>(() => {
+		if (virtualKey?.expires_at) return new Date(virtualKey.expires_at);
+		if (virtualKey?.ttl && virtualKey.ttl !== "none") {
+			const hoursMap: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168, "30d": 720, "90d": 2160, "180d": 4320, "365d": 8760 };
+			const hours = hoursMap[virtualKey.ttl] || 0;
+			if (hours > 0) return new Date(Date.now() + hours * 60 * 60 * 1000);
+		}
+		return null;
+	});
 
 	// Get current provider configs from form
 	const providerConfigs = form.watch("providerConfigs") || [];
@@ -425,6 +440,15 @@ export default function VirtualKeySheet({ virtualKey, teams, customers, onSave, 
 				const updateData: UpdateVirtualKeyRequest = {
 					name: data.name || undefined,
 					description: data.description || undefined,
+					ttl: data.ttl && data.ttl !== "none" ? data.ttl : undefined,
+					expires_at: (() => {
+						if (data.ttl && data.ttl !== "none") {
+							const hoursMap: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168, "30d": 720, "90d": 2160, "180d": 4320, "365d": 8760 };
+							const hours = hoursMap[data.ttl] || 0;
+							if (hours > 0) return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+						}
+						return undefined;
+					})(),
 					provider_configs: normalizedProviderConfigs,
 					mcp_configs: data.mcpConfigs,
 					team_id: data.entityType === "team" && data.teamId && data.teamId.trim() !== "" ? data.teamId : undefined,
@@ -471,6 +495,15 @@ export default function VirtualKeySheet({ virtualKey, teams, customers, onSave, 
 				const createData: CreateVirtualKeyRequest = {
 					name: data.name,
 					description: data.description || undefined,
+					ttl: data.ttl && data.ttl !== "none" ? data.ttl : undefined,
+					expires_at: (() => {
+						if (data.ttl && data.ttl !== "none") {
+							const hoursMap: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168, "30d": 720, "90d": 2160, "180d": 4320, "365d": 8760 };
+							const hours = hoursMap[data.ttl] || 0;
+							if (hours > 0) return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+						}
+						return undefined;
+					})(),
 					provider_configs: normalizedProviderConfigs,
 					mcp_configs: data.mcpConfigs,
 					team_id: data.entityType === "team" && data.teamId && data.teamId.trim() !== "" ? data.teamId : undefined,
@@ -556,6 +589,74 @@ export default function VirtualKeySheet({ virtualKey, teams, customers, onSave, 
 										</FormItem>
 									)}
 								/>
+
+								{/* Key Expiration Section */}
+								<div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
+									<Label className="text-sm font-medium">Key Expiration</Label>
+									<p className="text-muted-foreground text-xs">Set how long this key remains valid. Leave as "No Expiration" for a permanent key.</p>
+
+									<FormField
+										control={form.control}
+										name="ttl"
+										render={({ field }) => (
+											<FormItem>
+												<FormLabel className="text-xs">Time To Live (TTL)</FormLabel>
+												<Select
+													value={field.value || "none"}
+													onValueChange={(value) => {
+														field.onChange(value === "none" ? undefined : value);
+														// Auto-calculate expiration date from TTL
+														if (value && value !== "none") {
+															const hoursMap: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168, "30d": 720, "90d": 2160, "180d": 4320, "365d": 8760 };
+															const hours = hoursMap[value] || 0;
+															if (hours > 0) {
+																const expiry = new Date(Date.now() + hours * 60 * 60 * 1000);
+																setComputedExpiresAt(expiry);
+															}
+														} else {
+															setComputedExpiresAt(null);
+														}
+													}}
+												>
+													<FormControl>
+														<SelectTrigger data-testid="vk-ttl-select">
+															<SelectValue placeholder="Select TTL" />
+														</SelectTrigger>
+													</FormControl>
+													<SelectContent>
+														<SelectItem value="1h">1 Hour</SelectItem>
+														<SelectItem value="24h">24 Hours</SelectItem>
+														<SelectItem value="7d">7 Days</SelectItem>
+														<SelectItem value="30d">30 Days</SelectItem>
+														<SelectItem value="90d">90 Days</SelectItem>
+														<SelectItem value="180d">180 Days</SelectItem>
+														<SelectItem value="365d">365 Days (1 Year)</SelectItem>
+														<SelectItem value="none">No Expiration</SelectItem>
+													</SelectContent>
+												</Select>
+												<FormMessage />
+											</FormItem>
+										)}
+									/>
+
+									{/* Read-only expiration display */}
+									{computedExpiresAt && (
+										<div className="bg-background flex items-center gap-2 rounded-md border px-3 py-2 text-xs">
+											<Badge variant="secondary" className="font-mono text-[10px]">
+												{(() => {
+													const ttl = form.watch("ttl");
+													if (!ttl || ttl === "none") return "—";
+													const labels: Record<string, string> = { "1h": "1 Hour", "24h": "1 Day", "7d": "7 Days", "30d": "30 Days", "90d": "90 Days", "180d": "180 Days", "365d": "365 Days" };
+													return labels[ttl] || ttl;
+												})()}
+											</Badge>
+											<span className="text-muted-foreground">Expires at</span>
+											<span className="font-mono">
+												{computedExpiresAt.toLocaleDateString()} {computedExpiresAt.toLocaleTimeString()}
+											</span>
+										</div>
+									)}
+								</div>
 
 								<FormField
 									control={form.control}

@@ -571,6 +571,7 @@ func (m *AuthMiddleware) APIMiddleware() schemas.BifrostHTTPMiddleware {
 		"/api/session/login",
 		"/api/oauth/callback",
 		"/health",
+		"/api/providers/test-key",
 	}
 	whitelistedPrefixes := []string{
 		"/api/oauth/callback",

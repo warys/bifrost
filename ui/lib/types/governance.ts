@@ -77,6 +77,10 @@ export interface VirtualKey {
 	is_active: boolean;
 	created_at: string;
 	updated_at: string;
+	// Expiration fields
+	expires_at?: string;
+	ttl?: string;
+	is_expired?: boolean;
 	// Populated relationships
 	team?: Team;
 	customer?: Customer;
@@ -152,6 +156,8 @@ export interface VirtualKeyProviderConfigUpdateRequest {
 export interface CreateVirtualKeyRequest {
 	name: string;
 	description?: string;
+	ttl?: string;
+	expires_at?: string;
 	provider_configs?: VirtualKeyProviderConfigRequest[];
 	mcp_configs?: VirtualKeyMCPConfigRequest[];
 	team_id?: string;
@@ -164,6 +170,8 @@ export interface CreateVirtualKeyRequest {
 export interface UpdateVirtualKeyRequest {
 	name?: string;
 	description?: string;
+	ttl?: string;
+	expires_at?: string;
 	provider_configs?: VirtualKeyProviderConfigUpdateRequest[];
 	mcp_configs?: VirtualKeyMCPConfigRequest[];
 	team_id?: string;

@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,6 +104,7 @@ func (h *ProviderHandler) RegisterRoutes(r *router.Router, middlewares ...schema
 	r.GET("/api/models/details", lib.ChainMiddlewares(h.listModelDetails, middlewares...))
 	r.GET("/api/models/parameters", lib.ChainMiddlewares(h.getModelParameters, middlewares...))
 	r.GET("/api/models/base", lib.ChainMiddlewares(h.listBaseModels, middlewares...))
+	r.POST("/api/providers/test-key", lib.ChainMiddlewares(h.testProviderKey, middlewares...))
 }
 
 // listProviders handles GET /api/providers - List all providers
@@ -1455,4 +1457,158 @@ func validateRetryBackoff(networkConfig *schemas.NetworkConfig) error {
 		}
 	}
 	return nil
+}
+
+// TestProviderKeyRequest represents the request body for testing a provider key
+type TestProviderKeyRequest struct {
+	Provider string `json:"provider"`
+	KeyIndex int    `json:"key_index"`
+}
+
+// TestProviderKeyResponse represents the response for testing a provider key
+type TestProviderKeyResponse struct {
+	Success   bool   `json:"success"`
+	LatencyMs int    `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// testProviderKey handles POST /api/providers/test-key - Test a provider key connectivity via Bifrost
+func (h *ProviderHandler) testProviderKey(ctx *fasthttp.RequestCtx) {
+	var req TestProviderKeyRequest
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		SendError(ctx, 400, "Invalid JSON")
+		return
+	}
+
+	if req.Provider == "" {
+		SendError(ctx, 400, "Provider name is required")
+		return
+	}
+
+	providerName := schemas.ModelProvider(req.Provider)
+
+	// Get provider config
+	var providers map[schemas.ModelProvider]configstore.ProviderConfig
+	if h.dbStore != nil {
+		var err error
+		providers, err = h.dbStore.GetProvidersConfig(ctx)
+		if err != nil {
+			SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get providers: %v", err))
+			return
+		}
+	} else {
+		h.inMemoryStore.Mu.RLock()
+		providers = h.inMemoryStore.Providers
+		h.inMemoryStore.Mu.RUnlock()
+	}
+
+	providerConfig, exists := providers[providerName]
+	if !exists {
+		SendError(ctx, 404, "Provider not found")
+		return
+	}
+
+	// Get the key at the specified index
+	if req.KeyIndex < 0 || req.KeyIndex >= len(providerConfig.Keys) {
+		SendError(ctx, 400, "Invalid key index")
+		return
+	}
+
+	key := providerConfig.Keys[req.KeyIndex]
+	apiKey := key.Value.GetValue()
+
+	if apiKey == "" {
+		SendError(ctx, 400, "API key value is empty")
+		return
+	}
+
+	// Get base URL from provider config
+	baseURL := providerConfig.NetworkConfig.BaseURL
+	if baseURL == "" {
+		SendError(ctx, 400, fmt.Sprintf("Provider %s base URL is not configured", providerName))
+		return
+	}
+
+	// Determine test model: use key's first allowed model, or fallback to a default
+	testModel := "gpt-4o-mini"
+	for _, m := range key.Models {
+		if m != "*" && m != "" {
+			testModel = m
+			break
+		}
+	}
+
+	// Build test URL
+	baseURL = strings.TrimRight(baseURL, "/")
+	testURL := baseURL + "/v1/chat/completions"
+
+	startTime := time.Now()
+
+	// Create fasthttp request
+	req2 := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req2)
+	resp2 := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp2)
+
+	req2.SetRequestURI(testURL)
+	req2.Header.SetMethod("POST")
+	req2.Header.SetContentType("application/json")
+
+	// Set auth headers - always use Bearer for connectivity test through configured base URL
+	// (Proxies like gpt-agent.cc expect Bearer regardless of provider type)
+	req2.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// Minimal test request body
+	req2.SetBodyString(fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"Hi"}],"max_tokens":1}`, testModel))
+
+	// Configure TLS skip if set
+	client := &fasthttp.Client{
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	if providerConfig.NetworkConfig.InsecureSkipVerify {
+		client.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
+	err := client.DoTimeout(req2, resp2, 15*time.Second)
+	elapsed := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		ctx.SetStatusCode(200)
+		ctx.SetContentType("application/json")
+		respBody, _ := json.Marshal(TestProviderKeyResponse{
+			Success:   false,
+			LatencyMs: int(elapsed),
+			Error:     fmt.Sprintf("Connection failed: %v", err),
+		})
+		ctx.SetBody(respBody)
+		return
+	}
+
+	statusCode := resp2.StatusCode()
+	if statusCode >= 200 && statusCode < 300 {
+		ctx.SetStatusCode(200)
+		ctx.SetContentType("application/json")
+		respBody, _ := json.Marshal(TestProviderKeyResponse{
+			Success:   true,
+			LatencyMs: int(elapsed),
+			Message:   fmt.Sprintf("HTTP %d - Provider responded successfully (model: %s)", statusCode, testModel),
+		})
+		ctx.SetBody(respBody)
+	} else {
+		body := string(resp2.Body())
+		if len(body) > 500 {
+			body = body[:500]
+		}
+		ctx.SetStatusCode(200)
+		ctx.SetContentType("application/json")
+		respBody, _ := json.Marshal(TestProviderKeyResponse{
+			Success:   false,
+			LatencyMs: int(elapsed),
+			Error:     fmt.Sprintf("HTTP %d: %s", statusCode, body),
+		})
+		ctx.SetBody(respBody)
+	}
 }

@@ -21,23 +21,15 @@ import { ModelProvider } from "@/lib/types/config";
 import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { AlertCircle, CheckCircle2, EllipsisIcon, PencilIcon, PlusIcon, TrashIcon, ZapIcon } from "lucide-react";
-import { ReactNode, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import AddNewKeySheet from "../dialogs/addNewKeySheet";
 
-interface Props {
-	className?: string;
-	provider: ModelProvider;
-	headerActions?: ReactNode;
-	isKeyless?: boolean;
-	providerName?: string;
-}
-
 // Key test result state
 interface KeyTestResult {
 	keyIndex: number;
 	loading: boolean;
-	success: boolean | null; // null = not tested, true = success, false = failed
+	success: boolean | null;
 	latencyMs: number | null;
 	error?: string;
 }
@@ -48,15 +40,6 @@ interface Props {
 	headerActions?: ReactNode;
 	isKeyless?: boolean;
 	providerName?: string;
-}
-
-// Key test result state
-interface KeyTestResult {
-	keyIndex: number;
-	loading: boolean;
-	success: boolean | null; // null = not tested, true = success, false = failed
-	latencyMs: number | null;
-	error?: string;
 }
 
 export default function ModelProviderKeysTableView({ provider, className, headerActions, isKeyless, providerName }: Props) {
@@ -69,84 +52,67 @@ export default function ModelProviderKeysTableView({ provider, className, header
 	const [updateProvider, { isLoading: isUpdatingProvider }] = useUpdateProviderMutation();
 	const [showAddNewKeyDialog, setShowAddNewKeyDialog] = useState<{ show: boolean; keyIndex: number } | undefined>(undefined);
 	const [showDeleteKeyDialog, setShowDeleteKeyDialog] = useState<{ show: boolean; keyIndex: number } | undefined>(undefined);
-	const [testResults, setTestResults] = useState<Map<number, KeyTestResult>>(new Map());
+	const [testResults, setTestResults] = useState<Map<string, KeyTestResult>>(new Map());
+
+	// Clear test results when provider changes
+	useEffect(() => {
+		setTestResults(new Map());
+	}, [provider.name]);
 
 	function handleAddKey(keyIndex: number) {
 		setShowAddNewKeyDialog({ show: true, keyIndex: keyIndex });
 	}
 
-	// Test key connectivity
+	// Test key connectivity via Bifrost backend
 	async function handleTestKey(keyIndex: number) {
 		const key = provider.keys[keyIndex];
 		if (!key) return;
 
-		setTestResults((prev) => new Map(prev).set(keyIndex, { keyIndex, loading: true, success: null, latencyMs: null }));
+		const resultKey = `${provider.name}-${keyIndex}`;
+		setTestResults((prev) => new Map(prev).set(resultKey, { keyIndex, loading: true, success: null, latencyMs: null }));
 
 		const startTime = performance.now();
 
 		try {
-			// Build test request using the provider's base URL and key
-			const baseUrl = provider.network_config?.base_url || "";
-			const apiKey = key.value?.value || "";
-
-			// For Azure/Vertex/Bedrock, use different test endpoints
-			let testUrl = `${baseUrl}/v1/models`;
-			let headers: Record<string, string> = {
-				"Content-Type": "application/json",
-			};
-
-			if (key.azure_key_config) {
-				// Azure uses different endpoint structure
-				testUrl = `${key.azure_key_config.endpoint}/openai/models?api-version=2024-02-01`;
-				headers["api-key"] = apiKey;
-			} else if (key.vertex_key_config || key.bedrock_key_config) {
-				// For Vertex/Bedrock, we'll use a simple chat completion test
-				testUrl = `${baseUrl}/v1/chat/completions`;
-				headers["Authorization"] = `Bearer ${apiKey}`;
-			} else {
-				// Standard OpenAI-compatible endpoint
-				headers["Authorization"] = `Bearer ${apiKey}`;
-			}
-
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
-
-			const response = await fetch(testUrl, {
-				method: "GET",
-				headers,
-				signal: controller.signal,
+			// Send test request through Bifrost backend (not directly to upstream)
+			const response = await fetch("/api/providers/test-key", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					provider: provider.name,
+					key_index: keyIndex,
+				}),
 			});
 
-			clearTimeout(timeoutId);
-			const latencyMs = Math.round(performance.now() - startTime);
+			const data = await response.json();
+			const latencyMs = data.latency_ms || 0;
 
-			if (response.ok) {
+			if (data.success) {
 				setTestResults((prev) =>
-					new Map(prev).set(keyIndex, { keyIndex, loading: false, success: true, latencyMs })
+					new Map(prev).set(resultKey, { keyIndex, loading: false, success: true, latencyMs })
 				);
 				toast.success(`${EntityLabel} connectivity test passed`, {
-					description: `Response time: ${latencyMs}ms`,
+					description: data.message || `Response time: ${latencyMs}ms`,
 				});
 			} else {
-				const errorText = await response.text().catch(() => "");
 				setTestResults((prev) =>
-					new Map(prev).set(keyIndex, {
+					new Map(prev).set(resultKey, {
 						keyIndex,
 						loading: false,
 						success: false,
 						latencyMs,
-						error: `HTTP ${response.status}: ${errorText.slice(0, 100)}`,
+						error: data.error || "Unknown error",
 					})
 				);
 				toast.error(`${EntityLabel} connectivity test failed`, {
-					description: `HTTP ${response.status} (${latencyMs}ms)`,
+					description: data.error || `HTTP error (${latencyMs}ms)`,
 				});
 			}
 		} catch (err: unknown) {
 			const latencyMs = Math.round(performance.now() - startTime);
 			const errorMessage = err instanceof Error ? err.message : "Unknown error";
 			setTestResults((prev) =>
-				new Map(prev).set(keyIndex, {
+				new Map(prev).set(resultKey, {
 					keyIndex,
 					loading: false,
 					success: false,
@@ -254,7 +220,8 @@ export default function ModelProviderKeysTableView({ provider, className, header
 							)}
 							{provider.keys.map((key, index) => {
 								const isKeyEnabled = key.enabled ?? true;
-								const testResult = testResults.get(index);
+								const resultKey = `${provider.name}-${index}`;
+								const testResult = testResults.get(resultKey);
 								return (
 									<TableRow key={index} data-testid={`key-row-${key.name}`} className="text-sm transition-colors hover:bg-white" onClick={() => {}}>
 										<TableCell>

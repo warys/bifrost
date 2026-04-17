@@ -66,6 +66,8 @@ func NewGovernanceHandler(manager GovernanceManager, configStore configstore.Con
 type CreateVirtualKeyRequest struct {
 	Name            string `json:"name" validate:"required"`
 	Description     string `json:"description,omitempty"`
+	TTL             string `json:"ttl,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
 	ProviderConfigs []struct {
 		Provider      string                  `json:"provider" validate:"required"`
 		Weight        float64                 `json:"weight,omitempty"`
@@ -89,6 +91,8 @@ type CreateVirtualKeyRequest struct {
 type UpdateVirtualKeyRequest struct {
 	Name            *string `json:"name,omitempty"`
 	Description     *string `json:"description,omitempty"`
+	TTL             *string `json:"ttl,omitempty"`
+	ExpiresAt       *string `json:"expires_at,omitempty"`
 	ProviderConfigs []struct {
 		ID            *uint                   `json:"id,omitempty"` // null for new entries
 		Provider      string                  `json:"provider" validate:"required"`
@@ -462,6 +466,24 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 			CustomerID:  req.CustomerID,
 			IsActive:    isActive,
 		}
+
+		// Handle TTL and ExpiresAt
+		if req.TTL != "" {
+			vk.TTL = req.TTL
+			if duration, err := configstoreTables.ParseDuration(req.TTL); err == nil {
+				now := time.Now()
+				expiry := now.Add(duration)
+				vk.ExpiresAt = &expiry
+			}
+		}
+		if req.ExpiresAt != "" {
+			expiry, err := time.Parse(time.RFC3339, req.ExpiresAt)
+			if err != nil {
+				return fmt.Errorf("invalid expires_at format (use RFC3339): %w", err)
+			}
+			vk.ExpiresAt = &expiry
+		}
+
 		if req.Budget != nil {
 			budget := configstoreTables.TableBudget{
 				ID:              uuid.NewString(),
@@ -709,6 +731,33 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 		if req.IsActive != nil {
 			vk.IsActive = *req.IsActive
 		}
+
+		// Handle TTL and ExpiresAt updates
+		if req.TTL != nil {
+			vk.TTL = *req.TTL
+			if *req.TTL != "" {
+				if duration, err := configstoreTables.ParseDuration(*req.TTL); err == nil {
+					now := time.Now()
+					expiry := now.Add(duration)
+					vk.ExpiresAt = &expiry
+				}
+			} else {
+				vk.ExpiresAt = nil
+			}
+		}
+		if req.ExpiresAt != nil {
+			if *req.ExpiresAt != "" {
+				expiry, err := time.Parse(time.RFC3339, *req.ExpiresAt)
+				if err != nil {
+					return fmt.Errorf("invalid expires_at format (use RFC3339): %w", err)
+				}
+				vk.ExpiresAt = &expiry
+			} else {
+				vk.ExpiresAt = nil
+				vk.TTL = ""
+			}
+		}
+
 		// Handle budget updates
 		if req.Budget != nil {
 			if isBudgetRemovalRequest(req.Budget) {
