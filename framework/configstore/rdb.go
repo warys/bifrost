@@ -1713,7 +1713,7 @@ func (s *RDBConfigStore) UpdateVirtualKey(ctx context.Context, virtualKey *table
 	} else {
 		virtualKey.ID = existing.ID
 		if err := txDB.WithContext(ctx).
-			Select("name", "description", "value", "is_active", "team_id", "customer_id", "budget_id", "rate_limit_id", "config_hash", "updated_at", "encryption_status", "value_hash").
+			Select("name", "description", "value", "is_active", "team_id", "customer_id", "budget_id", "rate_limit_id", "config_hash", "updated_at", "encryption_status", "value_hash", "expires_at", "ttl", "is_expired").
 			Updates(virtualKey).Error; err != nil {
 			return s.parseGormError(err)
 		}

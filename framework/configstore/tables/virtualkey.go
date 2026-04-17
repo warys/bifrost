@@ -215,6 +215,11 @@ type TableVirtualKey struct {
 
 	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"index;not null" json:"updated_at"`
+
+	// Expiration fields for virtual key TTL
+	ExpiresAt *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	TTL       string     `gorm:"type:varchar(50)" json:"ttl,omitempty"`
+	IsExpired bool       `gorm:"default:false;index" json:"is_expired"`
 }
 
 // TableName sets the table name for each model
@@ -227,6 +232,20 @@ func (vk *TableVirtualKey) BeforeSave(tx *gorm.DB) error {
 	// Enforce mutual exclusion: VK can belong to either Team OR Customer, not both
 	if vk.TeamID != nil && vk.CustomerID != nil {
 		return fmt.Errorf("virtual key cannot belong to both team and customer")
+	}
+
+	// Auto-calculate ExpiresAt from TTL if TTL is set and ExpiresAt is not already set
+	if vk.TTL != "" && vk.ExpiresAt == nil {
+		if duration, err := ParseDuration(vk.TTL); err == nil {
+			now := time.Now()
+			expiry := now.Add(duration)
+			vk.ExpiresAt = &expiry
+		}
+	}
+
+	// Update IsExpired flag based on ExpiresAt
+	if vk.ExpiresAt != nil {
+		vk.IsExpired = time.Now().After(*vk.ExpiresAt)
 	}
 
 	// Hash must be computed before encryption (from plaintext value)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
@@ -18,7 +19,8 @@ const (
 	DecisionAllow              Decision = "allow"
 	DecisionVirtualKeyNotFound Decision = "virtual_key_not_found"
 	DecisionVirtualKeyBlocked  Decision = "virtual_key_blocked"
-	DecisionRateLimited        Decision = "rate_limited"
+	DecisionKeyExpired      Decision = "key_expired"
+	DecisionRateLimited    Decision = "rate_limited"
 	DecisionBudgetExceeded     Decision = "budget_exceeded"
 	DecisionTokenLimited       Decision = "token_limited"
 	DecisionRequestLimited     Decision = "request_limited"
@@ -200,6 +202,13 @@ func (r *BudgetResolver) EvaluateVirtualKeyRequest(ctx *schemas.BifrostContext, 
 		return &EvaluationResult{
 			Decision: DecisionVirtualKeyBlocked,
 			Reason:   "Virtual key is inactive",
+		}
+	}
+	// Check if virtual key has expired
+	if vk.IsExpired || (vk.ExpiresAt != nil && time.Now().After(*vk.ExpiresAt)) {
+		return &EvaluationResult{
+			Decision: DecisionKeyExpired,
+			Reason:   "Virtual key has expired",
 		}
 	}
 	// 2. Check provider filtering
